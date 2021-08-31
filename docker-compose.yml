@@ -1,0 +1,86 @@
+version: "3.8"
+
+services:
+
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    restart: always
+    command:
+      #logging 
+      - --log.level=INFO
+      #providers
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      #ports
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      #https redirection
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      #TLS certificate
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --certificatesresolvers.le.acme.email=${EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      #api/dashboard
+      - --api=true
+      - --api.dashboard=true
+      - --api.insecure=false
+      #ping
+      - --ping
+      - --ping.manualRouting=true
+    ports:
+      - 80:80 #http
+      - 443:443 #https
+    volumes:
+      - ./letsencrypt:/letsencrypt
+      #let traefik see what docker containers are running
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - .auth:/.auth
+    networks:
+      - reverse-proxy
+      - internal
+    labels:
+      - traefik.enable=true
+      #authentication
+      - traefik.http.middlewares.auth.basicauth.usersfile=${AUTHFILE}
+      #allowed IPs
+      - traefik.http.middlewares.allowed-ips.ipwhitelist.sourcerange=${IPWHITELIST}
+      #api/dashboard
+      #when opening the dashboard, the trailing slash in /dashboard/ is mandatory
+      #https://doc.traefik.io/traefik/operations/dashboard/
+      - traefik.http.routers.api.rule=Host(`${HOST}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))
+      - traefik.http.routers.api.entrypoints=websecure
+      - traefik.http.routers.api.tls.certresolver=le
+      - traefik.http.routers.api.service=api@internal
+      - traefik.http.routers.api.middlewares=allowed-ips@docker,auth@docker
+      #ping
+      - traefik.http.routers.ping.rule=Host(`${HOST}`) && Path(`/ping`)
+      - traefik.http.routers.ping.entrypoints=websecure
+      - traefik.http.routers.ping.tls.certresolver=le
+      - traefik.http.routers.ping.service=ping@internal
+    logging:
+      driver: json-file
+      options:
+        max-file: "5"
+        max-size: "50m"
+
+  whoami:
+    image: traefik/whoami:latest
+    container_name: whoami
+    restart: unless-stopped
+    depends_on:
+      - traefik
+    networks:
+      - internal
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.whoami.rule=Host(`${HOST}`) && Path(`/whoami`)
+      - traefik.http.routers.whoami.entrypoints=websecure
+      - traefik.http.routers.whoami.tls.certresolver=le
+
+networks:
+  reverse-proxy:
+    external: true
+  internal:
+    external: false
